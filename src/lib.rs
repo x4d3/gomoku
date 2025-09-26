@@ -6,6 +6,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{
     window, CanvasRenderingContext2d, Element, HtmlCanvasElement, KeyboardEvent, PointerEvent,
+    WheelEvent,
 };
 
 #[wasm_bindgen(start)]
@@ -39,7 +40,6 @@ pub enum Cell {
     Black,
     White,
 }
-
 impl Cell {
     fn other(self) -> Cell {
         match self {
@@ -274,9 +274,11 @@ struct App {
     canvas: HtmlCanvasElement,
     ctx: CanvasRenderingContext2d,
     game: Game,
-    cell_px: f64,
+    cell_px: f64, // size of one cell in logical (CSS) px
     cam_x: f64,
     cam_y: f64,
+    view_w: f64, // canvas logical width (CSS px)
+    view_h: f64, // canvas logical height (CSS px)
     dirty: bool,
 }
 
@@ -289,27 +291,42 @@ impl App {
             cell_px: 36.0,
             cam_x: 0.0,
             cam_y: 0.0,
+            view_w: 0.0,
+            view_h: 0.0,
             dirty: true,
         }
     }
 
     fn attach_listeners(app: &Rc<RefCell<App>>) {
-        // Pointer (mouse + touch + pen)
+        // Pointer (tap/click) for placing stones
         {
             let app_rc = Rc::clone(app);
             let closure = Closure::<dyn FnMut(PointerEvent)>::new(move |e: PointerEvent| {
-                // Prevent touch from also triggering scroll/zoom gestures
                 e.prevent_default();
                 app_rc.borrow_mut().on_pointer_down(e);
             });
-            // Use pointerdown instead of click for mobile
             app.borrow()
                 .canvas
                 .add_event_listener_with_callback("pointerdown", closure.as_ref().unchecked_ref())
                 .unwrap();
             closure.forget();
         }
-        // Keyboard for panning / reset
+
+        // Wheel for zoom + horizontal pan
+        {
+            let app_rc = Rc::clone(app);
+            let closure = Closure::<dyn FnMut(WheelEvent)>::new(move |e: WheelEvent| {
+                e.prevent_default();
+                app_rc.borrow_mut().on_wheel(e);
+            });
+            app.borrow()
+                .canvas
+                .add_event_listener_with_callback("wheel", closure.as_ref().unchecked_ref())
+                .unwrap();
+            closure.forget();
+        }
+
+        // Keyboard panning / reset
         {
             let app_rc = Rc::clone(app);
             let doc = window().unwrap().document().unwrap();
@@ -320,6 +337,7 @@ impl App {
                 .unwrap();
             closure.forget();
         }
+
         // Resize
         {
             let app_rc = Rc::clone(app);
@@ -350,23 +368,41 @@ impl App {
     }
 
     fn resize(&mut self) {
-        let win = window().unwrap();
-        let w = win.inner_width().unwrap().as_f64().unwrap();
-        let h = win.inner_height().unwrap().as_f64().unwrap();
-        self.canvas.set_width(w as u32);
-        self.canvas.set_height(h as u32);
+        // Compute CSS (logical) size
+        let rect = self
+            .canvas
+            .unchecked_ref::<Element>()
+            .get_bounding_client_rect();
+        let css_w = rect.width();
+        let css_h = rect.height();
+        self.view_w = css_w;
+        self.view_h = css_h;
+
+        // Backing store size in device pixels
+        let dpr = window().unwrap().device_pixel_ratio();
+        self.canvas.set_width((css_w * dpr) as u32);
+        self.canvas.set_height((css_h * dpr) as u32);
+
+        // Draw in logical pixels by scaling the context
+        let _ = self.ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        let _ = self.ctx.scale(dpr, dpr);
+
         self.dirty = true;
     }
 
-    fn screen_to_cell(&self, sx: f64, sy: f64) -> (i32, i32) {
-        let x = ((sx - self.canvas.width() as f64 / 2.0) / self.cell_px + self.cam_x).round() as i32;
-        let y =
-            ((sy - self.canvas.height() as f64 / 2.0) / self.cell_px + self.cam_y).round() as i32;
+    // Mapping using logical sizes
+    fn screen_to_cell_f64(&self, sx: f64, sy: f64) -> (f64, f64) {
+        let x = (sx - self.view_w / 2.0) / self.cell_px + self.cam_x;
+        let y = (sy - self.view_h / 2.0) / self.cell_px + self.cam_y;
         (x, y)
+    }
+    fn screen_to_cell(&self, sx: f64, sy: f64) -> (i32, i32) {
+        let (x, y) = self.screen_to_cell_f64(sx, sy);
+        (x.round() as i32, y.round() as i32)
     }
 
     fn on_pointer_down(&mut self, e: PointerEvent) {
-        // Get client coords and translate relative to canvas
+        // Logical pointer coords
         let rect = self
             .canvas
             .unchecked_ref::<Element>()
@@ -383,6 +419,42 @@ impl App {
                 }
             }
         }
+    }
+
+    fn on_wheel(&mut self, e: WheelEvent) {
+        let rect = self
+            .canvas
+            .unchecked_ref::<Element>()
+            .get_bounding_client_rect();
+        let sx = e.client_x() as f64 - rect.left();
+        let sy = e.client_y() as f64 - rect.top();
+
+        let dx = e.delta_x();
+        let dy = e.delta_y();
+
+        if e.shift_key() || dx.abs() > dy.abs() {
+            // Horizontal pan by trackpad
+            let pan_cells = dx / self.cell_px.max(1.0);
+            self.cam_x += pan_cells;
+            self.dirty = true;
+            return;
+        }
+
+        // Zoom toward cursor
+        let zoom_step = 1.1_f64;
+        let old = self.cell_px;
+        let mut new = if dy < 0.0 { old * zoom_step } else { old / zoom_step };
+        new = new.clamp(12.0, 80.0);
+        if (new - old).abs() < f64::EPSILON {
+            return;
+        }
+
+        let (cell_x, cell_y) = self.screen_to_cell_f64(sx, sy);
+        self.cell_px = new;
+        self.cam_x = cell_x - (sx - self.view_w / 2.0) / self.cell_px;
+        self.cam_y = cell_y - (sy - self.view_h / 2.0) / self.cell_px;
+
+        self.dirty = true;
     }
 
     fn on_key(&mut self, e: KeyboardEvent) {
@@ -424,8 +496,10 @@ impl App {
             return;
         }
         self.dirty = false;
-        let w = self.canvas.width() as f64;
-        let h = self.canvas.height() as f64;
+        let w = self.view_w;
+        let h = self.view_h;
+
+        // background
         self.ctx.set_fill_style_str("#0b0d11");
         self.ctx.fill_rect(0.0, 0.0, w, h);
 

@@ -1,3 +1,16 @@
+//! Infinite Gomoku (5-in-a-row) in Rust → WebAssembly.
+//!
+//! - Unbounded sparse board keyed by `Pt`.
+//! - Player is Black; AI is White.
+//! - Mobile-friendly via Pointer Events; high-DPI aware canvas.
+//! - Mouse/touchpad wheel: zoom toward cursor; horizontal pan.
+//!
+//! Controls
+//! - Tap/click to place.
+//! - Wheel up/down = zoom in/out (toward cursor).
+//! - Shift+wheel or horizontal wheel = pan left/right.
+//! - Arrow keys to pan; `R` to reset.
+
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -9,6 +22,7 @@ use web_sys::{
     WheelEvent,
 };
 
+/// Entry point invoked by the browser when the module loads.
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
     #[cfg(feature = "console_error_panic_hook")]
@@ -24,23 +38,29 @@ pub fn start() -> Result<(), JsValue> {
         .unwrap()
         .dyn_into::<CanvasRenderingContext2d>()?;
 
+    // Shared UI/application state.
     let app = Rc::new(RefCell::new(App::new(canvas.clone(), ctx, Game::new())));
     App::attach_listeners(&app);
     app.borrow_mut().resize();
     app.borrow_mut().render();
 
+    // Animation loop keeps the UI responsive.
     wasm_bindgen_futures::spawn_local(App::raf_loop(app));
     Ok(())
 }
 
 /* ---------- Model ---------- */
 
+/// The side (owner of a stone or current player).
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Color {
+    /// Human player.
     Black,
+    /// AI opponent.
     White,
 }
 impl Color {
+    /// Returns the opponent color.
     fn other(self) -> Color {
         match self {
             Color::Black => Color::White,
@@ -49,21 +69,29 @@ impl Color {
     }
 }
 
+/// Integer grid point. Keys the sparse board and frontier.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 struct Pt {
     x: i32,
     y: i32,
 }
 impl Pt {
+    /// Constructs a new point.
     #[inline]
     fn new(x: i32, y: i32) -> Self {
         Self { x, y }
     }
+    /// Returns a point translated by `(dx, dy)`.
     #[inline]
     fn add(self, dx: i32, dy: i32) -> Self {
-        Self { x: self.x + dx, y: self.y + dy }
+        Self {
+            x: self.x + dx,
+            y: self.y + dy,
+        }
     }
 }
+
+/// Principal directions used for line checks (E, N, NE, SE).
 const DIRS: [Pt; 4] = [
     Pt { x: 1, y: 0 },
     Pt { x: 0, y: 1 },
@@ -71,16 +99,23 @@ const DIRS: [Pt; 4] = [
     Pt { x: 1, y: -1 },
 ];
 
+/// Core game state and rules engine (no I/O).
 #[derive(Clone)]
 struct Game {
-    cells: HashMap<Pt, Color>,   // empty = absent
-    player: Color,               // whose turn
-    winner: Option<Color>,       // None until someone wins
+    /// Sparse board: presence of a key indicates an occupied cell with its `Color`.
+    cells: HashMap<Pt, Color>,
+    /// Whose turn it is right now.
+    player: Color,
+    /// Winner if the game is finished; `None` otherwise.
+    winner: Option<Color>,
+    /// The last move made (for potential highlights/UX).
     last_move: Option<Pt>,
-    frontier: HashSet<Pt>,       // candidate empty points near stones
+    /// Candidate empty cells near existing stones; trims branching factor.
+    frontier: HashSet<Pt>,
 }
 
 impl Game {
+    /// Creates a fresh game with an empty board and an initialized frontier around the origin.
     fn new() -> Self {
         let mut g = Self {
             cells: HashMap::new(),
@@ -93,6 +128,7 @@ impl Game {
         g
     }
 
+    /// Clears the board and resets turn and winner.
     fn reset(&mut self) {
         self.cells.clear();
         self.player = Color::Black;
@@ -102,19 +138,25 @@ impl Game {
         self.rebuild_frontier();
     }
 
+    /// Color at `p` if occupied.
     #[inline]
     fn color_at(&self, p: Pt) -> Option<Color> {
         self.cells.get(&p).copied()
     }
+
+    /// Returns true if `p` is not occupied.
     #[inline]
     fn is_empty(&self, p: Pt) -> bool {
         !self.cells.contains_key(&p)
     }
 
+    /// Returns true if a move at `p` is legal (game ongoing and cell empty).
     fn playable(&self, p: Pt) -> bool {
         self.winner.is_none() && self.is_empty(p)
     }
 
+    /// Performs a move at `p` for the current player, updates winner/turn/frontier.
+    /// Returns `false` if the move was illegal.
     fn play(&mut self, p: Pt) -> bool {
         if !self.playable(p) {
             return false;
@@ -129,6 +171,8 @@ impl Game {
         true
     }
 
+    /// Recomputes the frontier set from current stones.
+    /// Seeds a small neighborhood around the origin if the board is empty.
     fn rebuild_frontier(&mut self) {
         self.frontier.clear();
         if self.cells.is_empty() {
@@ -151,6 +195,7 @@ impl Game {
         }
     }
 
+    /// Returns `true` if placing `who` at `p` completes a line of 5+ in any principal direction.
     fn check_win(&self, p: Pt, who: Color) -> bool {
         for d in DIRS {
             let mut count = 1;
@@ -163,6 +208,7 @@ impl Game {
         false
     }
 
+    /// Counts contiguous stones of `who` from `p + d` forward until a break.
     fn ray(&self, mut p: Pt, d: Pt, who: Color) -> i32 {
         let mut c = 0;
         p = p.add(d.x, d.y);
@@ -173,6 +219,7 @@ impl Game {
         c
     }
 
+    /// Returns `(a, b)` lengths for contiguous `who` stones forward/backward from `p` along `d`.
     fn line_len_open(&self, p: Pt, d: Pt, who: Color) -> (i32, i32) {
         // forward
         let mut a = 0;
@@ -191,6 +238,7 @@ impl Game {
         (a, b)
     }
 
+    /// Returns how many ends (0..=2) of the `who` line through `p` along `d` are open (empty).
     fn open_ends(&self, p: Pt, d: Pt, who: Color) -> i32 {
         let mut open = 0;
         // forward end
@@ -212,12 +260,17 @@ impl Game {
         open
     }
 
+    /// Heuristic score if `who` were to play at `p`.
+    ///
+    /// Combines offensive patterns (win/open four/open three…) and defensive urgency
+    /// (blocking opponent threats) across all four principal directions.
     fn score_point(&self, p: Pt, who: Color) -> i32 {
         if !self.is_empty(p) {
             return i32::MIN / 4;
         }
         let mut s = 0;
         for d in DIRS {
+            // offense
             let (a, b) = self.line_len_open(p, d, who);
             let len = a + 1 + b;
             let open = self.open_ends(p, d, who);
@@ -233,7 +286,7 @@ impl Game {
                 _ => 10,
             };
 
-            // defend opponent
+            // defense (block opponent)
             let opp = who.other();
             let (oa, ob) = self.line_len_open(p, d, opp);
             let olen = oa + 1 + ob;
@@ -250,6 +303,8 @@ impl Game {
         s
     }
 
+    /// Picks the best frontier move for `who` using the heuristic score.
+    /// Returns `(point, score)` if any candidate exists.
     fn best_move(&self, who: Color) -> Option<(Pt, i32)> {
         let mut best: Option<(Pt, i32)> = None;
         for &p in &self.frontier {
@@ -266,19 +321,27 @@ impl Game {
 
 /* ---------- App / UI ---------- */
 
+/// View/controller glue: canvas rendering, input handling, camera, and zoom.
 struct App {
     canvas: HtmlCanvasElement,
     ctx: CanvasRenderingContext2d,
     game: Game,
-    cell_px: f64, // one cell in logical (CSS) px
+
+    /// Size of one grid cell in **logical (CSS) pixels**.
+    cell_px: f64,
+    /// Camera center in board coordinates (cells).
     cam_x: f64,
     cam_y: f64,
-    view_w: f64, // logical width (CSS px)
-    view_h: f64, // logical height (CSS px)
+    /// Canvas logical size (CSS pixels); backing store is scaled by DPR.
+    view_w: f64,
+    view_h: f64,
+
+    /// Indicates a re-render is needed.
     dirty: bool,
 }
 
 impl App {
+    /// Constructs a new UI application with sane defaults.
     fn new(canvas: HtmlCanvasElement, ctx: CanvasRenderingContext2d, game: Game) -> Self {
         Self {
             canvas,
@@ -293,8 +356,9 @@ impl App {
         }
     }
 
+    /// Wires up Pointer, Wheel, Keyboard, and Resize listeners.
     fn attach_listeners(app: &Rc<RefCell<App>>) {
-        // Pointer (tap/click) for placing stones
+        // Pointer (tap/click) for placing stones.
         {
             let app_rc = Rc::clone(app);
             let closure = Closure::<dyn FnMut(PointerEvent)>::new(move |e: PointerEvent| {
@@ -308,7 +372,7 @@ impl App {
             closure.forget();
         }
 
-        // Wheel for zoom + horizontal pan
+        // Mouse/touchpad wheel for zoom (vertical) and horizontal panning.
         {
             let app_rc = Rc::clone(app);
             let closure = Closure::<dyn FnMut(WheelEvent)>::new(move |e: WheelEvent| {
@@ -322,7 +386,7 @@ impl App {
             closure.forget();
         }
 
-        // Keyboard panning / reset
+        // Keyboard panning and reset.
         {
             let app_rc = Rc::clone(app);
             let doc = window().unwrap().document().unwrap();
@@ -334,7 +398,7 @@ impl App {
             closure.forget();
         }
 
-        // Resize
+        // Resize to track device-pixel-ratio and viewport changes.
         {
             let app_rc = Rc::clone(app);
             let closure = Closure::<dyn FnMut()>::new(move || {
@@ -350,6 +414,7 @@ impl App {
         }
     }
 
+    /// Animation loop: ticks one frame per rAF and renders if `dirty`.
     async fn raf_loop(app: Rc<RefCell<App>>) {
         loop {
             app.borrow_mut().render();
@@ -363,6 +428,8 @@ impl App {
         }
     }
 
+    /// Resizes the canvas to device pixels and scales the 2D context so all drawing
+    /// uses logical pixels. Fixes mobile “offset” taps on high-DPI displays.
     fn resize(&mut self) {
         // Logical CSS size
         let rect = self
@@ -372,7 +439,7 @@ impl App {
         self.view_w = rect.width();
         self.view_h = rect.height();
 
-        // Backing store size in device pixels
+        // Backing store size in device pixels (HiDPI aware)
         let dpr = window().unwrap().device_pixel_ratio();
         self.canvas.set_width((self.view_w * dpr) as u32);
         self.canvas.set_height((self.view_h * dpr) as u32);
@@ -384,17 +451,21 @@ impl App {
         self.dirty = true;
     }
 
-    // Mapping using logical sizes
+    /// Maps screen coordinates (logical pixels) to fractional board coordinates.
+    /// Useful for zoom-centering math.
     fn screen_to_cell_f64(&self, sx: f64, sy: f64) -> (f64, f64) {
         let x = (sx - self.view_w / 2.0) / self.cell_px + self.cam_x;
         let y = (sy - self.view_h / 2.0) / self.cell_px + self.cam_y;
         (x, y)
     }
+
+    /// Maps screen coordinates to the nearest board cell as `Pt`.
     fn screen_to_cell(&self, sx: f64, sy: f64) -> Pt {
         let (x, y) = self.screen_to_cell_f64(sx, sy);
         Pt::new(x.round() as i32, y.round() as i32)
     }
 
+    /// Handles pointer/tap input. Converts to board coords and plays a move.
     fn on_pointer_down(&mut self, e: PointerEvent) {
         let rect = self
             .canvas
@@ -414,6 +485,9 @@ impl App {
         }
     }
 
+    /// Handles mouse/touchpad wheel:
+    /// - Shift or horizontal scroll → pan left/right in cell units.
+    /// - Vertical scroll → zoom toward cursor (clamped).
     fn on_wheel(&mut self, e: WheelEvent) {
         let rect = self
             .canvas
@@ -442,6 +516,7 @@ impl App {
             return;
         }
 
+        // Keep the cell under the cursor stationary in screen space
         let (cell_x, cell_y) = self.screen_to_cell_f64(sx, sy);
         self.cell_px = new;
         self.cam_x = cell_x - (sx - self.view_w / 2.0) / self.cell_px;
@@ -450,6 +525,7 @@ impl App {
         self.dirty = true;
     }
 
+    /// Handles arrow-key panning, +/- zoom, and reset.
     fn on_key(&mut self, e: KeyboardEvent) {
         match e.key().as_str() {
             "ArrowLeft" => {
@@ -484,6 +560,7 @@ impl App {
         }
     }
 
+    /// Renders the full scene (grid, stones, HUD) when `dirty` is set.
     fn render(&mut self) {
         if !self.dirty {
             return;

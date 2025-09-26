@@ -140,8 +140,8 @@ impl Game {
 
     /// Color at `p` if occupied.
     #[inline]
-    fn color_at(&self, p: Pt) -> Option<Color> {
-        self.cells.get(&p).copied()
+    fn color_at(&self, p: Pt) -> Option<&Color> {
+        self.cells.get(&p)
     }
 
     /// Returns true if `p` is not occupied.
@@ -212,7 +212,7 @@ impl Game {
     fn ray(&self, mut p: Pt, d: Pt, who: Color) -> i32 {
         let mut c = 0;
         p = p.add(d.x, d.y);
-        while self.color_at(p) == Some(who) {
+        while self.color_at(p) == Some(&who) {
             c += 1;
             p = p.add(d.x, d.y);
         }
@@ -224,14 +224,14 @@ impl Game {
         // forward
         let mut a = 0;
         let mut q = p.add(d.x, d.y);
-        while self.color_at(q) == Some(who) {
+        while self.color_at(q) == Some(&who) {
             a += 1;
             q = q.add(d.x, d.y);
         }
         // backward
         let mut b = 0;
         let mut r = p.add(-d.x, -d.y);
-        while self.color_at(r) == Some(who) {
+        while self.color_at(r) == Some(&who) {
             b += 1;
             r = r.add(-d.x, -d.y);
         }
@@ -243,7 +243,7 @@ impl Game {
         let mut open = 0;
         // forward end
         let mut q = p.add(d.x, d.y);
-        while self.color_at(q) == Some(who) {
+        while self.color_at(q) == Some(&who) {
             q = q.add(d.x, d.y);
         }
         if self.is_empty(q) {
@@ -251,7 +251,7 @@ impl Game {
         }
         // backward end
         let mut r = p.add(-d.x, -d.y);
-        while self.color_at(r) == Some(who) {
+        while self.color_at(r) == Some(&who) {
             r = r.add(-d.x, -d.y);
         }
         if self.is_empty(r) {
@@ -632,6 +632,12 @@ impl App {
             Some(Color::Black) => "You win! Press R to restart.",
             Some(Color::White) => "AI wins! Press R to restart.",
         };
+
+        let sha   = env!("BUILD_GIT_SHA");
+        let ts    = env!("BUILD_TS_UNIX");
+
         let _ = self.ctx.fill_text(status, 12.0, 22.0);
+        let build_info = format!("sha={sha} ts={ts}");
+        let _ = self.ctx.fill_text(&build_info, 12.0, h - 22.0);
     }
 }

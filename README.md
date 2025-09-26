@@ -16,7 +16,7 @@ You can play agains AI here: https://x4d3.github.io/gomoku/
 cargo build --release --target wasm32-unknown-unknown
 ```
 
-3) Generate JS bindings (outputs to ./web):
+3) Generate JS bindings (outputs to ./docs):
 ```
 wasm-bindgen --target web \
   --out-dir docs \

@@ -6,10 +6,14 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
+[build-dependencies]
+chrono = "0.4.42"
+
 [dependencies]
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
+
 
 [dependencies.web-sys]
 version = "0.3"
@@ -19,6 +23,7 @@ features = [
     "KeyboardEvent","PointerEvent","WheelEvent","DomRect",
     "EventTarget","Performance"
 ]
+build = "build.rs"
 
 
 [dependencies.console_error_panic_hook]

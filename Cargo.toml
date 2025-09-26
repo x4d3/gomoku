@@ -14,16 +14,11 @@ wasm-bindgen-futures = "0.4"
 [dependencies.web-sys]
 version = "0.3"
 features = [
-  "Window",
-  "Document",
-  "Element",
-  "HtmlCanvasElement",
-  "CanvasRenderingContext2d",
-  "MouseEvent",
-  "KeyboardEvent",
-  "Performance",
-  "EventTarget",
+    "Window", "Document", "Element",
+    "HtmlCanvasElement", "CanvasRenderingContext2d",
+    "KeyboardEvent", "PointerEvent", "DomRect", "EventTarget", "Performance"
 ]
+
 
 [dependencies.console_error_panic_hook]
 version = "0.1"

@@ -5,7 +5,7 @@ use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{
-    window, CanvasRenderingContext2d, HtmlCanvasElement, KeyboardEvent, MouseEvent,
+    window, CanvasRenderingContext2d, Element, HtmlCanvasElement, KeyboardEvent, PointerEvent,
 };
 
 #[wasm_bindgen(start)]
@@ -29,7 +29,6 @@ pub fn start() -> Result<(), JsValue> {
     app.borrow_mut().resize();
     app.borrow_mut().render();
 
-    // Keep rendering with rAF, sharing the same Rc state.
     wasm_bindgen_futures::spawn_local(App::raf_loop(app));
     Ok(())
 }
@@ -90,7 +89,6 @@ impl Game {
 
     fn rebuild_frontier(&mut self) {
         if self.cells.is_empty() {
-            // seed around origin
             for dx in -2..=2 {
                 for dy in -2..=2 {
                     if dx != 0 || dy != 0 {
@@ -195,7 +193,6 @@ impl Game {
                 _ => 10,
             };
 
-            // blocking opponent threats
             let opp = who.other();
             let (oa, ob) = self.line_len_open(x, y, dx, dy, opp);
             let olen = oa + 1 + ob;
@@ -297,19 +294,22 @@ impl App {
     }
 
     fn attach_listeners(app: &Rc<RefCell<App>>) {
-        // Click on canvas
+        // Pointer (mouse + touch + pen)
         {
             let app_rc = Rc::clone(app);
-            let closure = Closure::<dyn FnMut(MouseEvent)>::new(move |e: MouseEvent| {
-                app_rc.borrow_mut().on_click(e);
+            let closure = Closure::<dyn FnMut(PointerEvent)>::new(move |e: PointerEvent| {
+                // Prevent touch from also triggering scroll/zoom gestures
+                e.prevent_default();
+                app_rc.borrow_mut().on_pointer_down(e);
             });
+            // Use pointerdown instead of click for mobile
             app.borrow()
                 .canvas
-                .add_event_listener_with_callback("click", closure.as_ref().unchecked_ref())
+                .add_event_listener_with_callback("pointerdown", closure.as_ref().unchecked_ref())
                 .unwrap();
             closure.forget();
         }
-        // Keydown on document
+        // Keyboard for panning / reset
         {
             let app_rc = Rc::clone(app);
             let doc = window().unwrap().document().unwrap();
@@ -365,10 +365,15 @@ impl App {
         (x, y)
     }
 
-    fn on_click(&mut self, e: MouseEvent) {
-        // offset_* are already relative to the canvas target
-        let sx = e.offset_x() as f64;
-        let sy = e.offset_y() as f64;
+    fn on_pointer_down(&mut self, e: PointerEvent) {
+        // Get client coords and translate relative to canvas
+        let rect = self
+            .canvas
+            .unchecked_ref::<Element>()
+            .get_bounding_client_rect();
+        let sx = e.client_x() as f64 - rect.left();
+        let sy = e.client_y() as f64 - rect.top();
+
         let (x, y) = self.screen_to_cell(sx, sy);
         if self.game.play(x, y) {
             self.dirty = true;

@@ -14,8 +14,7 @@ pub fn start() -> Result<(), JsValue> {
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
 
-    let win = window().unwrap();
-    let doc = win.document().unwrap();
+    let doc = window().unwrap().document().unwrap();
     let canvas: HtmlCanvasElement = doc
         .get_element_by_id("board")
         .unwrap()
@@ -34,18 +33,18 @@ pub fn start() -> Result<(), JsValue> {
     Ok(())
 }
 
+/* ---------- Model ---------- */
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub enum Cell {
-    Empty,
+pub enum Color {
     Black,
     White,
 }
-impl Cell {
-    fn other(self) -> Cell {
+impl Color {
+    fn other(self) -> Color {
         match self {
-            Cell::Black => Cell::White,
-            Cell::White => Cell::Black,
-            _ => Cell::Empty,
+            Color::Black => Color::White,
+            Color::White => Color::Black,
         }
     }
 }
@@ -55,22 +54,38 @@ struct Pt {
     x: i32,
     y: i32,
 }
+impl Pt {
+    #[inline]
+    fn new(x: i32, y: i32) -> Self {
+        Self { x, y }
+    }
+    #[inline]
+    fn add(self, dx: i32, dy: i32) -> Self {
+        Self { x: self.x + dx, y: self.y + dy }
+    }
+}
+const DIRS: [Pt; 4] = [
+    Pt { x: 1, y: 0 },
+    Pt { x: 0, y: 1 },
+    Pt { x: 1, y: 1 },
+    Pt { x: 1, y: -1 },
+];
 
 #[derive(Clone)]
 struct Game {
-    cells: HashMap<(i32, i32), Cell>,
-    player: Cell,
-    winner: Cell,
+    cells: HashMap<Pt, Color>,   // empty = absent
+    player: Color,               // whose turn
+    winner: Option<Color>,       // None until someone wins
     last_move: Option<Pt>,
-    frontier: HashSet<(i32, i32)>,
+    frontier: HashSet<Pt>,       // candidate empty points near stones
 }
 
 impl Game {
     fn new() -> Self {
         let mut g = Self {
             cells: HashMap::new(),
-            player: Cell::Black,
-            winner: Cell::Empty,
+            player: Color::Black,
+            winner: None,
             last_move: None,
             frontier: HashSet::new(),
         };
@@ -80,79 +95,67 @@ impl Game {
 
     fn reset(&mut self) {
         self.cells.clear();
-        self.player = Cell::Black;
-        self.winner = Cell::Empty;
+        self.player = Color::Black;
+        self.winner = None;
         self.last_move = None;
         self.frontier.clear();
         self.rebuild_frontier();
     }
 
-    fn rebuild_frontier(&mut self) {
-        if self.cells.is_empty() {
-            for dx in -2..=2 {
-                for dy in -2..=2 {
-                    if dx != 0 || dy != 0 {
-                        self.frontier.insert((dx, dy));
-                    }
-                }
-            }
-            self.frontier.insert((0, 0));
-            return;
-        }
-        self.frontier.clear();
-        for (&(x, y), &c) in self.cells.iter() {
-            if c == Cell::Empty {
-                continue;
-            }
-            for dx in -2..=2 {
-                for dy in -2..=2 {
-                    let p = (x + dx, y + dy);
-                    if !self.cells.contains_key(&p) {
-                        self.frontier.insert(p);
-                    }
-                }
-            }
-        }
+    #[inline]
+    fn color_at(&self, p: Pt) -> Option<Color> {
+        self.cells.get(&p).copied()
+    }
+    #[inline]
+    fn is_empty(&self, p: Pt) -> bool {
+        !self.cells.contains_key(&p)
     }
 
-    fn get(&self, x: i32, y: i32) -> Cell {
-        *self.cells.get(&(x, y)).unwrap_or(&Cell::Empty)
-    }
-    fn set(&mut self, x: i32, y: i32, c: Cell) {
-        if c == Cell::Empty {
-            self.cells.remove(&(x, y));
-        } else {
-            self.cells.insert((x, y), c);
-        }
+    fn playable(&self, p: Pt) -> bool {
+        self.winner.is_none() && self.is_empty(p)
     }
 
-    fn playable(&self, x: i32, y: i32) -> bool {
-        self.winner == Cell::Empty && self.get(x, y) == Cell::Empty
-    }
-
-    fn play(&mut self, x: i32, y: i32) -> bool {
-        if !self.playable(x, y) {
+    fn play(&mut self, p: Pt) -> bool {
+        if !self.playable(p) {
             return false;
         }
-        self.set(x, y, self.player);
-        self.last_move = Some(Pt { x, y });
-        if self.check_win(x, y, self.player) {
-            self.winner = self.player;
+        self.cells.insert(p, self.player);
+        self.last_move = Some(p);
+        if self.check_win(p, self.player) {
+            self.winner = Some(self.player);
         }
         self.player = self.player.other();
         self.rebuild_frontier();
         true
     }
 
-    fn dirs() -> &'static [(i32, i32); 4] {
-        &[(1, 0), (0, 1), (1, 1), (1, -1)]
+    fn rebuild_frontier(&mut self) {
+        self.frontier.clear();
+        if self.cells.is_empty() {
+            for dx in -2..=2 {
+                for dy in -2..=2 {
+                    self.frontier.insert(Pt::new(dx, dy));
+                }
+            }
+            return;
+        }
+        for (&p, _) in self.cells.iter() {
+            for dx in -2..=2 {
+                for dy in -2..=2 {
+                    let q = p.add(dx, dy);
+                    if !self.cells.contains_key(&q) {
+                        self.frontier.insert(q);
+                    }
+                }
+            }
+        }
     }
 
-    fn check_win(&self, x: i32, y: i32, who: Cell) -> bool {
-        for &(dx, dy) in Self::dirs() {
+    fn check_win(&self, p: Pt, who: Color) -> bool {
+        for d in DIRS {
             let mut count = 1;
-            count += self.ray(x, y, dx, dy, who);
-            count += self.ray(x, y, -dx, -dy, who);
+            count += self.ray(p, d, who);
+            count += self.ray(p, Pt::new(-d.x, -d.y), who);
             if count >= 5 {
                 return true;
             }
@@ -160,27 +163,64 @@ impl Game {
         false
     }
 
-    fn ray(&self, x: i32, y: i32, dx: i32, dy: i32, who: Cell) -> i32 {
+    fn ray(&self, mut p: Pt, d: Pt, who: Color) -> i32 {
         let mut c = 0;
-        let mut cx = x + dx;
-        let mut cy = y + dy;
-        while self.get(cx, cy) == who {
+        p = p.add(d.x, d.y);
+        while self.color_at(p) == Some(who) {
             c += 1;
-            cx += dx;
-            cy += dy;
+            p = p.add(d.x, d.y);
         }
         c
     }
 
-    fn score_point(&self, x: i32, y: i32, who: Cell) -> i32 {
-        if self.get(x, y) != Cell::Empty {
+    fn line_len_open(&self, p: Pt, d: Pt, who: Color) -> (i32, i32) {
+        // forward
+        let mut a = 0;
+        let mut q = p.add(d.x, d.y);
+        while self.color_at(q) == Some(who) {
+            a += 1;
+            q = q.add(d.x, d.y);
+        }
+        // backward
+        let mut b = 0;
+        let mut r = p.add(-d.x, -d.y);
+        while self.color_at(r) == Some(who) {
+            b += 1;
+            r = r.add(-d.x, -d.y);
+        }
+        (a, b)
+    }
+
+    fn open_ends(&self, p: Pt, d: Pt, who: Color) -> i32 {
+        let mut open = 0;
+        // forward end
+        let mut q = p.add(d.x, d.y);
+        while self.color_at(q) == Some(who) {
+            q = q.add(d.x, d.y);
+        }
+        if self.is_empty(q) {
+            open += 1;
+        }
+        // backward end
+        let mut r = p.add(-d.x, -d.y);
+        while self.color_at(r) == Some(who) {
+            r = r.add(-d.x, -d.y);
+        }
+        if self.is_empty(r) {
+            open += 1;
+        }
+        open
+    }
+
+    fn score_point(&self, p: Pt, who: Color) -> i32 {
+        if !self.is_empty(p) {
             return i32::MIN / 4;
         }
         let mut s = 0;
-        for &(dx, dy) in Self::dirs() {
-            let (a, b) = self.line_len_open(x, y, dx, dy, who);
+        for d in DIRS {
+            let (a, b) = self.line_len_open(p, d, who);
             let len = a + 1 + b;
-            let open = self.open_ends(x, y, dx, dy, who);
+            let open = self.open_ends(p, d, who);
             s += match (len, open) {
                 (l, _) if l >= 5 => 1_000_000,
                 (4, 2) => 50_000,
@@ -193,10 +233,11 @@ impl Game {
                 _ => 10,
             };
 
+            // defend opponent
             let opp = who.other();
-            let (oa, ob) = self.line_len_open(x, y, dx, dy, opp);
+            let (oa, ob) = self.line_len_open(p, d, opp);
             let olen = oa + 1 + ob;
-            let oopen = self.open_ends(x, y, dx, dy, opp);
+            let oopen = self.open_ends(p, d, opp);
             s += match (olen, oopen) {
                 (l, _) if l >= 5 => 900_000,
                 (4, 2) => 40_000,
@@ -209,76 +250,31 @@ impl Game {
         s
     }
 
-    fn line_len_open(&self, x: i32, y: i32, dx: i32, dy: i32, who: Cell) -> (i32, i32) {
-        let mut a = 0;
-        let mut cx = x + dx;
-        let mut cy = y + dy;
-        while self.get(cx, cy) == who {
-            a += 1;
-            cx += dx;
-            cy += dy;
-        }
-        let mut b = 0;
-        let mut cx2 = x - dx;
-        let mut cy2 = y - dy;
-        while self.get(cx2, cy2) == who {
-            b += 1;
-            cx2 -= dx;
-            cy2 -= dy;
-        }
-        (a, b)
-    }
-
-    fn open_ends(&self, x: i32, y: i32, dx: i32, dy: i32, who: Cell) -> i32 {
-        let mut open = 0;
-        // forward
-        let mut cx = x + dx;
-        let mut cy = y + dy;
-        while self.get(cx, cy) == who {
-            cx += dx;
-            cy += dy;
-        }
-        if self.get(cx, cy) == Cell::Empty {
-            open += 1;
-        }
-        // backward
-        let mut cx2 = x - dx;
-        let mut cy2 = y - dy;
-        while self.get(cx2, cy2) == who {
-            cx2 -= dx;
-            cy2 -= dy;
-        }
-        if self.get(cx2, cy2) == Cell::Empty {
-            open += 1;
-        }
-        open
-    }
-
-    fn best_move(&self, who: Cell) -> Option<(i32, i32, i32)> {
-        let mut best: Option<(i32, i32, i32)> = None;
-        for &(x, y) in self.frontier.iter() {
-            let sc = self.score_point(x, y, who);
-            if let Some((_, _, bs)) = best {
-                if sc > bs {
-                    best = Some((x, y, sc));
-                }
-            } else {
-                best = Some((x, y, sc));
-            }
+    fn best_move(&self, who: Color) -> Option<(Pt, i32)> {
+        let mut best: Option<(Pt, i32)> = None;
+        for &p in &self.frontier {
+            let sc = self.score_point(p, who);
+            best = match best {
+                None => Some((p, sc)),
+                Some((_, bs)) if sc > bs => Some((p, sc)),
+                other => other,
+            };
         }
         best
     }
 }
 
+/* ---------- App / UI ---------- */
+
 struct App {
     canvas: HtmlCanvasElement,
     ctx: CanvasRenderingContext2d,
     game: Game,
-    cell_px: f64, // size of one cell in logical (CSS) px
+    cell_px: f64, // one cell in logical (CSS) px
     cam_x: f64,
     cam_y: f64,
-    view_w: f64, // canvas logical width (CSS px)
-    view_h: f64, // canvas logical height (CSS px)
+    view_w: f64, // logical width (CSS px)
+    view_h: f64, // logical height (CSS px)
     dirty: bool,
 }
 
@@ -368,20 +364,18 @@ impl App {
     }
 
     fn resize(&mut self) {
-        // Compute CSS (logical) size
+        // Logical CSS size
         let rect = self
             .canvas
             .unchecked_ref::<Element>()
             .get_bounding_client_rect();
-        let css_w = rect.width();
-        let css_h = rect.height();
-        self.view_w = css_w;
-        self.view_h = css_h;
+        self.view_w = rect.width();
+        self.view_h = rect.height();
 
         // Backing store size in device pixels
         let dpr = window().unwrap().device_pixel_ratio();
-        self.canvas.set_width((css_w * dpr) as u32);
-        self.canvas.set_height((css_h * dpr) as u32);
+        self.canvas.set_width((self.view_w * dpr) as u32);
+        self.canvas.set_height((self.view_h * dpr) as u32);
 
         // Draw in logical pixels by scaling the context
         let _ = self.ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
@@ -396,13 +390,12 @@ impl App {
         let y = (sy - self.view_h / 2.0) / self.cell_px + self.cam_y;
         (x, y)
     }
-    fn screen_to_cell(&self, sx: f64, sy: f64) -> (i32, i32) {
+    fn screen_to_cell(&self, sx: f64, sy: f64) -> Pt {
         let (x, y) = self.screen_to_cell_f64(sx, sy);
-        (x.round() as i32, y.round() as i32)
+        Pt::new(x.round() as i32, y.round() as i32)
     }
 
     fn on_pointer_down(&mut self, e: PointerEvent) {
-        // Logical pointer coords
         let rect = self
             .canvas
             .unchecked_ref::<Element>()
@@ -410,12 +403,12 @@ impl App {
         let sx = e.client_x() as f64 - rect.left();
         let sy = e.client_y() as f64 - rect.top();
 
-        let (x, y) = self.screen_to_cell(sx, sy);
-        if self.game.play(x, y) {
+        let p = self.screen_to_cell(sx, sy);
+        if self.game.play(p) {
             self.dirty = true;
-            if self.game.winner == Cell::Empty {
-                if let Some((ax, ay, _)) = self.game.best_move(self.game.player) {
-                    self.game.play(ax, ay);
+            if self.game.winner.is_none() {
+                if let Some((ai_p, _)) = self.game.best_move(self.game.player) {
+                    self.game.play(ai_p);
                 }
             }
         }
@@ -529,9 +522,9 @@ impl App {
         }
 
         // stones
-        for (&(x, y), &c) in self.game.cells.iter() {
-            let sx = (x as f64 - self.cam_x) * self.cell_px + w / 2.0;
-            let sy = (y as f64 - self.cam_y) * self.cell_px + h / 2.0;
+        for (&p, &c) in self.game.cells.iter() {
+            let sx = (p.x as f64 - self.cam_x) * self.cell_px + w / 2.0;
+            let sy = (p.y as f64 - self.cam_y) * self.cell_px + h / 2.0;
             if sx < -self.cell_px
                 || sx > w + self.cell_px
                 || sy < -self.cell_px
@@ -543,9 +536,8 @@ impl App {
             self.ctx.begin_path();
             let _ = self.ctx.arc(sx, sy, r, 0.0, std::f64::consts::TAU);
             match c {
-                Cell::Black => self.ctx.set_fill_style_str("#e6edf3"),
-                Cell::White => self.ctx.set_fill_style_str("#38bdf8"),
-                _ => {}
+                Color::Black => self.ctx.set_fill_style_str("#e6edf3"),
+                Color::White => self.ctx.set_fill_style_str("#38bdf8"),
             }
             self.ctx.fill();
         }
@@ -555,16 +547,13 @@ impl App {
         self.ctx
             .set_font("14px ui-sans-serif, system-ui, -apple-system");
         let turn = match self.game.player {
-            Cell::Black => "Your turn (X)",
-            Cell::White => "AI thinking (O)",
-            _ => "",
+            Color::Black => "Your turn (X)",
+            Color::White => "AI thinking (O)",
         };
-        let status = if self.game.winner == Cell::Empty {
-            turn
-        } else if self.game.winner == Cell::Black {
-            "You win! Press R to restart."
-        } else {
-            "AI wins! Press R to restart."
+        let status = match self.game.winner {
+            None => turn,
+            Some(Color::Black) => "You win! Press R to restart.",
+            Some(Color::White) => "AI wins! Press R to restart.",
         };
         let _ = self.ctx.fill_text(status, 12.0, 22.0);
     }

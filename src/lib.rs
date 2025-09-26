@@ -426,11 +426,11 @@ impl App {
         self.dirty = false;
         let w = self.canvas.width() as f64;
         let h = self.canvas.height() as f64;
-        self.ctx.set_fill_style(&"#0b0d11".into());
+        self.ctx.set_fill_style_str("#0b0d11");
         self.ctx.fill_rect(0.0, 0.0, w, h);
 
         // grid
-        self.ctx.set_stroke_style(&"#20242b".into());
+        self.ctx.set_stroke_style_str("#20242b");
         self.ctx.set_line_width(1.0);
         let half_w = (w / 2.0) / self.cell_px;
         let half_h = (h / 2.0) / self.cell_px;
@@ -469,15 +469,15 @@ impl App {
             self.ctx.begin_path();
             let _ = self.ctx.arc(sx, sy, r, 0.0, std::f64::consts::TAU);
             match c {
-                Cell::Black => self.ctx.set_fill_style(&"#e6edf3".into()),
-                Cell::White => self.ctx.set_fill_style(&"#38bdf8".into()),
+                Cell::Black => self.ctx.set_fill_style_str("#e6edf3"),
+                Cell::White => self.ctx.set_fill_style_str("#38bdf8"),
                 _ => {}
             }
             self.ctx.fill();
         }
 
         // HUD
-        self.ctx.set_fill_style(&"#e5e7eb".into());
+        self.ctx.set_fill_style_str("#e5e7eb");
         self.ctx
             .set_font("14px ui-sans-serif, system-ui, -apple-system");
         let turn = match self.game.player {

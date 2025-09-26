@@ -3,6 +3,8 @@
 Unbounded-grid Gomoku with a heuristic AI, compiled to WebAssembly.
 Controls: Click to place, Arrow keys to pan, `R` to restart, `+`/`-` to zoom.
 
+You can play agains AI here: https://x4d3.github.io/gomoku/
+
 ## Build
 1) Install toolchain:
    - Rust: https://rustup.rs

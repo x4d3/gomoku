@@ -17,13 +17,13 @@ cargo build --release --target wasm32-unknown-unknown
 3) Generate JS bindings (outputs to ./web):
 ```
 wasm-bindgen --target web \
-  --out-dir web \
+  --out-dir docs \
   --no-typescript \
   target/wasm32-unknown-unknown/release/gomoku.wasm
 ```
 
-4) Serve `web/`:
+4) Serve `docs/`:
 ```
-cd web && python -m http.server 8000
+cd docs && python -m http.server 8000
 # open http://localhost:8000
 ```

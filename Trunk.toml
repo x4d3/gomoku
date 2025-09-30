@@ -2,3 +2,4 @@
 dist = "docs"               # The output dir for all final assets.
 filehash = true             # Whether to include hash values in the output file names.
 inject_scripts = true       # Whether to inject scripts (and module preloads) into the finalized output.
+public_url = "./"

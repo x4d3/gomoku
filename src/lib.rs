@@ -1,7 +1,7 @@
 //! Infinite Gomoku (5-in-a-row) in Rust → WebAssembly.
 //!
 //! - Unbounded sparse board keyed by `Pt`.
-//! - Player is Black; AI is White.
+//! - Choose Human/AI per color via on-canvas toggles.
 //! - Mobile-friendly via Pointer Events; high-DPI aware canvas.
 //! - Mouse/touchpad wheel: zoom toward cursor; horizontal pan.
 //!
@@ -19,7 +19,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{
     window, CanvasRenderingContext2d, Element, HtmlCanvasElement, KeyboardEvent, PointerEvent,
-    WheelEvent,
+    WheelEvent
 };
 
 /// Entry point invoked by the browser when the module loads.
@@ -41,10 +41,16 @@ pub fn start() -> Result<(), JsValue> {
     // Shared UI/application state.
     let app = Rc::new(RefCell::new(App::new(canvas.clone(), ctx, Game::new())));
     App::attach_listeners(&app);
-    app.borrow_mut().resize();
-    app.borrow_mut().render();
 
-    // Animation loop keeps the UI responsive.
+    {
+        let mut a = app.borrow_mut();
+        a.resize();
+        a.render();
+        if a.is_ai_turn() {
+            a.queue_ai_soon(120.0);
+        }
+    }
+
     wasm_bindgen_futures::spawn_local(App::raf_loop(app));
     Ok(())
 }
@@ -54,13 +60,10 @@ pub fn start() -> Result<(), JsValue> {
 /// The side (owner of a stone or current player).
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Color {
-    /// Human player.
     Black,
-    /// AI opponent.
     White,
 }
 impl Color {
-    /// Returns the opponent color.
     fn other(self) -> Color {
         match self {
             Color::Black => Color::White,
@@ -76,12 +79,10 @@ struct Pt {
     y: i32,
 }
 impl Pt {
-    /// Constructs a new point.
     #[inline]
     fn new(x: i32, y: i32) -> Self {
         Self { x, y }
     }
-    /// Returns a point translated by `(dx, dy)`.
     #[inline]
     fn add(self, dx: i32, dy: i32) -> Self {
         Self {
@@ -91,7 +92,6 @@ impl Pt {
     }
 }
 
-/// Principal directions used for line checks (E, N, NE, SE).
 const DIRS: [Pt; 4] = [
     Pt { x: 1, y: 0 },
     Pt { x: 0, y: 1 },
@@ -99,23 +99,16 @@ const DIRS: [Pt; 4] = [
     Pt { x: 1, y: -1 },
 ];
 
-/// Core game state and rules engine (no I/O).
 #[derive(Clone)]
 struct Game {
-    /// Sparse board: presence of a key indicates an occupied cell with its `Color`.
     cells: HashMap<Pt, Color>,
-    /// Whose turn it is right now.
     player: Color,
-    /// Winner if the game is finished; `None` otherwise.
     winner: Option<Color>,
-    /// The last move made (for potential highlights/UX).
     last_move: Option<Pt>,
-    /// Candidate empty cells near existing stones; trims branching factor.
     frontier: HashSet<Pt>,
 }
 
 impl Game {
-    /// Creates a fresh game with an empty board and an initialized frontier around the origin.
     fn new() -> Self {
         let mut g = Self {
             cells: HashMap::new(),
@@ -128,7 +121,6 @@ impl Game {
         g
     }
 
-    /// Clears the board and resets turn and winner.
     fn reset(&mut self) {
         self.cells.clear();
         self.player = Color::Black;
@@ -138,25 +130,20 @@ impl Game {
         self.rebuild_frontier();
     }
 
-    /// Color at `p` if occupied.
     #[inline]
     fn color_at(&self, p: Pt) -> Option<&Color> {
         self.cells.get(&p)
     }
 
-    /// Returns true if `p` is not occupied.
     #[inline]
     fn is_empty(&self, p: Pt) -> bool {
         !self.cells.contains_key(&p)
     }
 
-    /// Returns true if a move at `p` is legal (game ongoing and cell empty).
     fn playable(&self, p: Pt) -> bool {
         self.winner.is_none() && self.is_empty(p)
     }
 
-    /// Performs a move at `p` for the current player, updates winner/turn/frontier.
-    /// Returns `false` if the move was illegal.
     fn play(&mut self, p: Pt) -> bool {
         if !self.playable(p) {
             return false;
@@ -171,8 +158,6 @@ impl Game {
         true
     }
 
-    /// Recomputes the frontier set from current stones.
-    /// Seeds a small neighborhood around the origin if the board is empty.
     fn rebuild_frontier(&mut self) {
         self.frontier.clear();
         if self.cells.is_empty() {
@@ -195,7 +180,6 @@ impl Game {
         }
     }
 
-    /// Returns `true` if placing `who` at `p` completes a line of 5+ in any principal direction.
     fn check_win(&self, p: Pt, who: Color) -> bool {
         for d in DIRS {
             let mut count = 1;
@@ -208,7 +192,6 @@ impl Game {
         false
     }
 
-    /// Counts contiguous stones of `who` from `p + d` forward until a break.
     fn ray(&self, mut p: Pt, d: Pt, who: Color) -> i32 {
         let mut c = 0;
         p = p.add(d.x, d.y);
@@ -219,16 +202,13 @@ impl Game {
         c
     }
 
-    /// Returns `(a, b)` lengths for contiguous `who` stones forward/backward from `p` along `d`.
     fn line_len_open(&self, p: Pt, d: Pt, who: Color) -> (i32, i32) {
-        // forward
         let mut a = 0;
         let mut q = p.add(d.x, d.y);
         while self.color_at(q) == Some(&who) {
             a += 1;
             q = q.add(d.x, d.y);
         }
-        // backward
         let mut b = 0;
         let mut r = p.add(-d.x, -d.y);
         while self.color_at(r) == Some(&who) {
@@ -238,10 +218,8 @@ impl Game {
         (a, b)
     }
 
-    /// Returns how many ends (0..=2) of the `who` line through `p` along `d` are open (empty).
     fn open_ends(&self, p: Pt, d: Pt, who: Color) -> i32 {
         let mut open = 0;
-        // forward end
         let mut q = p.add(d.x, d.y);
         while self.color_at(q) == Some(&who) {
             q = q.add(d.x, d.y);
@@ -249,7 +227,6 @@ impl Game {
         if self.is_empty(q) {
             open += 1;
         }
-        // backward end
         let mut r = p.add(-d.x, -d.y);
         while self.color_at(r) == Some(&who) {
             r = r.add(-d.x, -d.y);
@@ -260,17 +237,12 @@ impl Game {
         open
     }
 
-    /// Heuristic score if `who` were to play at `p`.
-    ///
-    /// Combines offensive patterns (win/open four/open three…) and defensive urgency
-    /// (blocking opponent threats) across all four principal directions.
     fn score_point(&self, p: Pt, who: Color) -> i32 {
         if !self.is_empty(p) {
             return i32::MIN / 4;
         }
         let mut s = 0;
         for d in DIRS {
-            // offense
             let (a, b) = self.line_len_open(p, d, who);
             let len = a + 1 + b;
             let open = self.open_ends(p, d, who);
@@ -286,7 +258,6 @@ impl Game {
                 _ => 10,
             };
 
-            // defense (block opponent)
             let opp = who.other();
             let (oa, ob) = self.line_len_open(p, d, opp);
             let olen = oa + 1 + ob;
@@ -303,8 +274,6 @@ impl Game {
         s
     }
 
-    /// Picks the best frontier move for `who` using the heuristic score.
-    /// Returns `(point, score)` if any candidate exists.
     fn best_move(&self, who: Color) -> Option<(Pt, i32)> {
         let mut best: Option<(Pt, i32)> = None;
         for &p in &self.frontier {
@@ -321,44 +290,58 @@ impl Game {
 
 /* ---------- App / UI ---------- */
 
-/// View/controller glue: canvas rendering, input handling, camera, and zoom.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum Controller {
+    Human,
+    AI,
+}
+
 struct App {
     canvas: HtmlCanvasElement,
     ctx: CanvasRenderingContext2d,
     game: Game,
 
-    /// Size of one grid cell in **logical (CSS) pixels**.
+    ctrl_black: Controller,
+    ctrl_white: Controller,
+
     cell_px: f64,
-    /// Camera center in board coordinates (cells).
     cam_x: f64,
     cam_y: f64,
-    /// Canvas logical size (CSS pixels); backing store is scaled by DPR.
     view_w: f64,
     view_h: f64,
 
-    /// Indicates a re-render is needed.
+    want_ai: bool,
+    next_ai_at_ms: f64,
+
+    btn_black: (f64, f64, f64, f64),
+    btn_white: (f64, f64, f64, f64),
+
     dirty: bool,
 }
 
 impl App {
-    /// Constructs a new UI application with sane defaults.
     fn new(canvas: HtmlCanvasElement, ctx: CanvasRenderingContext2d, game: Game) -> Self {
         Self {
             canvas,
             ctx,
             game,
+            ctrl_black: Controller::Human,
+            ctrl_white: Controller::AI,
             cell_px: 36.0,
             cam_x: 0.0,
             cam_y: 0.0,
             view_w: 0.0,
             view_h: 0.0,
+            want_ai: false,
+            next_ai_at_ms: 0.0,
+            btn_black: (0.0, 0.0, 0.0, 0.0),
+            btn_white: (0.0, 0.0, 0.0, 0.0),
             dirty: true,
         }
     }
 
-    /// Wires up Pointer, Wheel, Keyboard, and Resize listeners.
     fn attach_listeners(app: &Rc<RefCell<App>>) {
-        // Pointer (tap/click) for placing stones.
+        // Pointer
         {
             let app_rc = Rc::clone(app);
             let closure = Closure::<dyn FnMut(PointerEvent)>::new(move |e: PointerEvent| {
@@ -371,8 +354,7 @@ impl App {
                 .unwrap();
             closure.forget();
         }
-
-        // Mouse/touchpad wheel for zoom (vertical) and horizontal panning.
+        // Wheel
         {
             let app_rc = Rc::clone(app);
             let closure = Closure::<dyn FnMut(WheelEvent)>::new(move |e: WheelEvent| {
@@ -385,8 +367,7 @@ impl App {
                 .unwrap();
             closure.forget();
         }
-
-        // Keyboard panning and reset.
+        // Keyboard
         {
             let app_rc = Rc::clone(app);
             let doc = window().unwrap().document().unwrap();
@@ -397,8 +378,7 @@ impl App {
                 .unwrap();
             closure.forget();
         }
-
-        // Resize to track device-pixel-ratio and viewport changes.
+        // Resize
         {
             let app_rc = Rc::clone(app);
             let closure = Closure::<dyn FnMut()>::new(move || {
@@ -414,10 +394,13 @@ impl App {
         }
     }
 
-    /// Animation loop: ticks one frame per rAF and renders if `dirty`.
     async fn raf_loop(app: Rc<RefCell<App>>) {
         loop {
-            app.borrow_mut().render();
+            {
+                let mut a = app.borrow_mut();
+                a.maybe_ai_step();
+                a.render();
+            }
             let _ =
                 wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, _| {
                     window()
@@ -425,14 +408,11 @@ impl App {
                         .request_animation_frame(resolve.unchecked_ref())
                         .unwrap();
                 }))
-                .await;
+                    .await;
         }
     }
 
-    /// Resizes the canvas to device pixels and scales the 2D context so all drawing
-    /// uses logical pixels. Fixes mobile “offset” taps on high-DPI displays.
     fn resize(&mut self) {
-        // Logical CSS size
         let rect = self
             .canvas
             .unchecked_ref::<Element>()
@@ -440,40 +420,66 @@ impl App {
         self.view_w = rect.width();
         self.view_h = rect.height();
 
-        // Backing store size in device pixels (HiDPI aware)
         let dpr = window().unwrap().device_pixel_ratio();
         self.canvas.set_width((self.view_w * dpr) as u32);
         self.canvas.set_height((self.view_h * dpr) as u32);
 
-        // Draw in logical pixels by scaling the context
         let _ = self.ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
         let _ = self.ctx.scale(dpr, dpr);
 
         self.dirty = true;
     }
 
-    /// Maps screen coordinates (logical pixels) to fractional board coordinates.
-    /// Useful for zoom-centering math.
     fn screen_to_cell_f64(&self, sx: f64, sy: f64) -> (f64, f64) {
         let x = (sx - self.view_w / 2.0) / self.cell_px + self.cam_x;
         let y = (sy - self.view_h / 2.0) / self.cell_px + self.cam_y;
         (x, y)
     }
-
-    /// Maps screen coordinates to the nearest board cell as `Pt`.
     fn screen_to_cell(&self, sx: f64, sy: f64) -> Pt {
         let (x, y) = self.screen_to_cell_f64(sx, sy);
         Pt::new(x.round() as i32, y.round() as i32)
     }
 
-    /// Handles pointer/tap input. Converts to board coords and plays a move.
-    fn on_pointer_down(&mut self, e: PointerEvent) {
-        if self.game.winner.is_some() {
-            self.game.reset();
-            self.dirty = true;
+    fn is_human(&self, side: Color) -> bool {
+        match side {
+            Color::Black => self.ctrl_black == Controller::Human,
+            Color::White => self.ctrl_white == Controller::Human,
+        }
+    }
+    fn is_ai(&self, side: Color) -> bool {
+        !self.is_human(side)
+    }
+    fn is_ai_turn(&self) -> bool {
+        self.game.winner.is_none() && self.is_ai(self.game.player)
+    }
+
+    fn queue_ai_soon(&mut self, delay_ms: f64) {
+        let now = window().unwrap().performance().unwrap().now();
+        self.want_ai = true;
+        self.next_ai_at_ms = now + delay_ms;
+    }
+    fn maybe_ai_step(&mut self) {
+        if !self.is_ai_turn() || !self.want_ai {
             return;
         }
+        let now = window().unwrap().performance().unwrap().now();
+        if now < self.next_ai_at_ms {
+            return;
+        }
+        if let Some((ai_p, _)) = self.game.best_move(self.game.player) {
+            self.game.play(ai_p);
+            self.dirty = true;
+            if self.is_ai_turn() {
+                self.queue_ai_soon(120.0);
+            } else {
+                self.want_ai = false;
+            }
+        } else {
+            self.want_ai = false;
+        }
+    }
 
+    fn on_pointer_down(&mut self, e: PointerEvent) {
         let rect = self
             .canvas
             .unchecked_ref::<Element>()
@@ -481,20 +487,61 @@ impl App {
         let sx = e.client_x() as f64 - rect.left();
         let sy = e.client_y() as f64 - rect.top();
 
+        if self.game.winner.is_some() {
+            self.game.reset();
+            self.dirty = true;
+            if self.is_ai_turn() {
+                self.queue_ai_soon(120.0);
+            } else {
+                self.want_ai = false;
+            }
+            return;
+        }
+
+        // Toggle pills first.
+        if self.hit_btn(self.btn_black, sx, sy) {
+            self.ctrl_black = if self.ctrl_black == Controller::Human {
+                Controller::AI
+            } else {
+                Controller::Human
+            };
+            self.dirty = true;
+            if self.game.player == Color::Black && self.is_ai(Color::Black) {
+                self.queue_ai_soon(80.0);
+            }
+            return;
+        }
+        if self.hit_btn(self.btn_white, sx, sy) {
+            self.ctrl_white = if self.ctrl_white == Controller::Human {
+                Controller::AI
+            } else {
+                Controller::Human
+            };
+            self.dirty = true;
+            if self.game.player == Color::White && self.is_ai(Color::White) {
+                self.queue_ai_soon(80.0);
+            }
+            return;
+        }
+
+        // Board play (human-only)
+        if !self.is_human(self.game.player) {
+            return;
+        }
         let p = self.screen_to_cell(sx, sy);
         if self.game.play(p) {
             self.dirty = true;
-            if self.game.winner.is_none() {
-                if let Some((ai_p, _)) = self.game.best_move(self.game.player) {
-                    self.game.play(ai_p);
-                }
+            if self.is_ai_turn() {
+                self.queue_ai_soon(120.0);
             }
         }
     }
 
-    /// Handles mouse/touchpad wheel:
-    /// - Shift or horizontal scroll → pan left/right in cell units.
-    /// - Vertical scroll → zoom toward cursor (clamped).
+    fn hit_btn(&self, btn: (f64, f64, f64, f64), sx: f64, sy: f64) -> bool {
+        let (x, y, w, h) = btn;
+        sx >= x && sx <= x + w && sy >= y && sy <= y + h
+    }
+
     fn on_wheel(&mut self, e: WheelEvent) {
         let rect = self
             .canvas
@@ -507,27 +554,20 @@ impl App {
         let dy = e.delta_y();
 
         if e.shift_key() || dx.abs() > dy.abs() {
-            // Horizontal pan by trackpad
             let pan_cells = dx / self.cell_px.max(1.0);
             self.cam_x += pan_cells;
             self.dirty = true;
             return;
         }
 
-        // Zoom toward cursor
         let zoom_step = 1.1_f64;
         let old = self.cell_px;
-        let mut new = if dy < 0.0 {
-            old * zoom_step
-        } else {
-            old / zoom_step
-        };
+        let mut new = if dy < 0.0 { old * zoom_step } else { old / zoom_step };
         new = new.clamp(12.0, 80.0);
         if (new - old).abs() < f64::EPSILON {
             return;
         }
 
-        // Keep the cell under the cursor stationary in screen space
         let (cell_x, cell_y) = self.screen_to_cell_f64(sx, sy);
         self.cell_px = new;
         self.cam_x = cell_x - (sx - self.view_w / 2.0) / self.cell_px;
@@ -536,7 +576,6 @@ impl App {
         self.dirty = true;
     }
 
-    /// Handles arrow-key panning, +/- zoom, and reset.
     fn on_key(&mut self, e: KeyboardEvent) {
         match e.key().as_str() {
             "ArrowLeft" => {
@@ -566,12 +605,16 @@ impl App {
             "r" | "R" => {
                 self.game.reset();
                 self.dirty = true;
+                if self.is_ai_turn() {
+                    self.queue_ai_soon(120.0);
+                } else {
+                    self.want_ai = false;
+                }
             }
             _ => {}
         }
     }
 
-    /// Renders the full scene (grid, stones, HUD) when `dirty` is set.
     fn render(&mut self) {
         if !self.dirty {
             return;
@@ -630,8 +673,10 @@ impl App {
             self.ctx.fill();
         }
 
-        // HUD
-        self.ctx.set_fill_style_str("#e5e7eb");
+        // HUD: controller pills only; no turn text.
+        self.draw_controller_pills();
+
+        // Winner overlay (centered) unchanged
         if let Some(winner) = self.game.winner {
             let msg = match winner {
                 Color::Black => "You win!",
@@ -642,47 +687,157 @@ impl App {
             let w2 = w / 2.0;
             let h2 = h / 2.0;
 
-            // Measure to size a backdrop nicely
-            self.ctx.set_font("bold 36px ui-sans-serif, system-ui, -apple-system");
-            let msg_w = self.ctx.measure_text(msg).ok().map(|m| m.width()).unwrap_or(0.0);
+            self.ctx
+                .set_font("bold 36px ui-sans-serif, system-ui, -apple-system");
+            let msg_w = self
+                .ctx
+                .measure_text(msg)
+                .ok()
+                .map(|m| m.width())
+                .unwrap_or(0.0);
 
-            self.ctx.set_font("16px ui-sans-serif, system-ui, -apple-system");
-            let sub_w = self.ctx.measure_text(sub).ok().map(|m| m.width()).unwrap_or(0.0);
+            self.ctx
+                .set_font("16px ui-sans-serif, system-ui, -apple-system");
+            let sub_w = self
+                .ctx
+                .measure_text(sub)
+                .ok()
+                .map(|m| m.width())
+                .unwrap_or(0.0);
 
             let pad = 24.0;
             let box_w = msg_w.max(sub_w) + pad * 2.0;
-            let box_h = 36.0 + 8.0 + 16.0 + pad * 2.0; // title + gap + subtitle + padding
+            let box_h = 36.0 + 8.0 + 16.0 + pad * 2.0;
 
-            // Backdrop (semi-transparent)
             self.ctx.set_fill_style_str("rgba(0,0,0,0.55)");
-            self.ctx.fill_rect(w2 - box_w / 2.0, h2 - box_h / 2.0, box_w, box_h);
+            self.ctx
+                .fill_rect(w2 - box_w / 2.0, h2 - box_h / 2.0, box_w, box_h);
 
-            // Center baseline + alignment
             self.ctx.set_text_align("center");
             self.ctx.set_text_baseline("middle");
 
-            // Title
             self.ctx.set_fill_style_str("#e6edf3");
-            self.ctx.set_font("bold 36px ui-sans-serif, system-ui, -apple-system");
+            self.ctx
+                .set_font("bold 36px ui-sans-serif, system-ui, -apple-system");
             let _ = self.ctx.fill_text(msg, w2, h2 - 10.0);
 
-            // Subtitle
             self.ctx.set_fill_style_str("#cbd5e1");
-            self.ctx.set_font("16px ui-sans-serif, system-ui, -apple-system");
+            self.ctx
+                .set_font("16px ui-sans-serif, system-ui, -apple-system");
             let _ = self.ctx.fill_text(sub, w2, h2 + 24.0);
-        } else {
-            self.ctx.set_font("14px ui-sans-serif, system-ui, -apple-system");
-            let turn = match self.game.player {
-                Color::Black => "Your turn (X)",
-                Color::White => "AI thinking (O)",
-            };
-            let _ = self.ctx.fill_text(turn, 12.0, 22.0);
+
+            self.ctx.set_text_align("left");
+            self.ctx.set_text_baseline("alphabetic");
         }
 
+        // Build timestamp HUD
         let ts = env!("BUILD_TS_UNIX");
         self.ctx.set_text_align("left");
         self.ctx.set_text_baseline("alphabetic");
-        self.ctx.set_font("14px ui-sans-serif, system-ui, -apple-system");
+        self.ctx
+            .set_font("14px ui-sans-serif, system-ui, -apple-system");
         let _ = self.ctx.fill_text(ts, 12.0, h - 22.0);
+    }
+
+    /// Draw the Human/AI toggle pills and store their hitboxes.
+    /// The pill for the **current turn** is highlighted with a bright outline.
+    fn draw_controller_pills(&mut self) {
+        let pad_x = 12.0;
+        let y = 44.0;
+        let gap = 10.0;
+        let pill_h = 26.0;
+
+        self.ctx
+            .set_font("12px ui-sans-serif, system-ui, -apple-system");
+
+        let fmt = |c: Controller| match c {
+            Controller::Human => "Human",
+            Controller::AI => "AI",
+        };
+
+        let b_label = format!("Black: {}", fmt(self.ctrl_black));
+        let w_label = format!("White: {}", fmt(self.ctrl_white));
+
+        let b_w = self
+            .ctx
+            .measure_text(&b_label)
+            .ok()
+            .map(|m| m.width())
+            .unwrap_or(80.0)
+            + 20.0;
+        let w_w = self
+            .ctx
+            .measure_text(&w_label)
+            .ok()
+            .map(|m| m.width())
+            .unwrap_or(80.0)
+            + 20.0;
+
+        let x0 = pad_x;
+        let x1 = x0 + b_w + gap;
+
+        self.btn_black = (x0, y - pill_h + 8.0, b_w, pill_h);
+        self.btn_white = (x1, y - pill_h + 8.0, w_w, pill_h);
+
+        // Helper: draw pill with fill driven by controller, and outline if current player's pill.
+        let draw_pill = |x: f64, text: &str, is_current: bool, is_ai: bool, w: f64| {
+            // Fill indicates Human/AI (subtle)
+            self.ctx
+                .set_fill_style_str(if is_ai { "#111827" } else { "#1f2937" });
+            self.ctx.begin_path();
+            let r = 13.0;
+            let y0 = y - pill_h + 8.0;
+            let x1 = x + w;
+            let y1 = y0 + pill_h;
+            self.ctx.move_to(x + r, y0);
+            self.ctx.line_to(x1 - r, y0);
+            let _ = self
+                .ctx
+                .arc(x1 - r, y0 + r, r, -std::f64::consts::FRAC_PI_2, 0.0);
+            self.ctx.line_to(x1, y1 - r);
+            let _ = self
+                .ctx
+                .arc(x1 - r, y1 - r, r, 0.0, std::f64::consts::FRAC_PI_2);
+            self.ctx.line_to(x + r, y1);
+            let _ = self
+                .ctx
+                .arc(x + r, y1 - r, r, std::f64::consts::FRAC_PI_2, std::f64::consts::PI);
+            self.ctx.line_to(x, y0 + r);
+            let _ = self
+                .ctx
+                .arc(x + r, y0 + r, r, std::f64::consts::PI, 3.0 * std::f64::consts::FRAC_PI_2);
+            self.ctx.close_path();
+            self.ctx.fill();
+
+            // Outline: bright if current turn, muted otherwise.
+            if is_current {
+                self.ctx.set_stroke_style_str("#38bdf8"); // highlight
+                self.ctx.set_line_width(2.0);
+            } else {
+                self.ctx.set_stroke_style_str("#374151");
+                self.ctx.set_line_width(1.0);
+            }
+            self.ctx.stroke();
+
+            self.ctx.set_fill_style_str("#e5e7eb");
+            self.ctx.set_text_align("left");
+            self.ctx.set_text_baseline("alphabetic");
+            let _ = self.ctx.fill_text(text, x + 10.0, y);
+        };
+
+        draw_pill(
+            x0,
+            &b_label,
+            self.game.player == Color::Black,
+            self.ctrl_black == Controller::AI,
+            b_w,
+        );
+        draw_pill(
+            x1,
+            &w_label,
+            self.game.player == Color::White,
+            self.ctrl_white == Controller::AI,
+            w_w,
+        );
     }
 }

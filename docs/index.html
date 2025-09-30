@@ -21,8 +21,8 @@
     <!-- Trunk builds the Rust crate at this path (Cargo.toml up one level) -->
     
 <script type="module">
-import init, * as bindings from '/gomoku-ee4df16f400fb35a.js';
-const wasm = await init({ module_or_path: '/gomoku-ee4df16f400fb35a_bg.wasm' });
+import init, * as bindings from '/gomoku-baccdc0f766e67c2.js';
+const wasm = await init({ module_or_path: '/gomoku-baccdc0f766e67c2_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -31,7 +31,7 @@ window.wasmBindings = bindings;
 dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
-<link rel="modulepreload" href="/gomoku-ee4df16f400fb35a.js" crossorigin="anonymous" integrity="sha384-nkbsxWIARBttXEZ6HrabpkzMukyjj2ifKxSW/o622YDFGX/Us03nj5fX3IBdPcbx"><link rel="preload" href="/gomoku-ee4df16f400fb35a_bg.wasm" crossorigin="anonymous" integrity="sha384-0DxNhwZY7L9mJF/d29TIOn4s8MPktI+rQfp8LYi7QeY4vazlPEBMM4j5uAOh1LYC" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/gomoku-baccdc0f766e67c2.js" crossorigin="anonymous" integrity="sha384-OzOBPF5VS6UCOePuZFF0vjTWJ9FGJL+dVYC4OBLfDNsuh1oncprCXi+mLj3iYTzR"><link rel="preload" href="/gomoku-baccdc0f766e67c2_bg.wasm" crossorigin="anonymous" integrity="sha384-HE6s6mf0Xatb77B0ppihSJPq067maG7+nbrHi6zdgB/YkDIi6Np0SMuzpG7Jodnt" as="fetch" type="application/wasm"></head>
 <body>
 <canvas id="board"></canvas>
 </body>

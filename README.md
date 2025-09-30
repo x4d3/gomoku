@@ -16,3 +16,8 @@ You can play agains AI here: https://x4d3.github.io/gomoku/
 ```
 trunk serve --open
 ```
+
+2) Build
+```
+trunk build
+```

@@ -679,10 +679,10 @@ impl App {
             let _ = self.ctx.fill_text(turn, 12.0, 22.0);
         }
 
-        let sha = env!("BUILD_GIT_SHA");
         let ts = env!("BUILD_TS_UNIX");
-        let build_info = format!("sha={sha} ts={ts}");
+        self.ctx.set_text_align("left");
+        self.ctx.set_text_baseline("alphabetic");
         self.ctx.set_font("14px ui-sans-serif, system-ui, -apple-system");
-        let _ = self.ctx.fill_text(&build_info, 12.0, h - 22.0);
+        let _ = self.ctx.fill_text(ts, 12.0, h - 22.0);
     }
 }

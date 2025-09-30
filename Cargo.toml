@@ -17,12 +17,7 @@ wasm-bindgen-futures = "0.4"
 
 [dependencies.web-sys]
 version = "0.3"
-features = [
-    "Window","Document","Element",
-    "HtmlCanvasElement","CanvasRenderingContext2d",
-    "KeyboardEvent","PointerEvent","WheelEvent","DomRect",
-    "EventTarget","Performance"
-]
+features = ["Window", "Document", "Element", "HtmlCanvasElement", "CanvasRenderingContext2d", "KeyboardEvent", "PointerEvent", "WheelEvent", "DomRect", "EventTarget", "Performance", "TextMetrics"]
 build = "build.rs"
 
 

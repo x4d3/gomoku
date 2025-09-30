@@ -10,22 +10,9 @@ You can play agains AI here: https://x4d3.github.io/gomoku/
    - Rust: https://rustup.rs
    - wasm target: `rustup target add wasm32-unknown-unknown`
    - wasm-bindgen-cli: `cargo install wasm-bindgen-cli`
+   - `cargo install --locked trunk`
 
-2) Build:
+2) Serve
 ```
-cargo build --release --target wasm32-unknown-unknown
-```
-
-3) Generate JS bindings (outputs to ./docs):
-```
-wasm-bindgen --target web \
-  --out-dir docs \
-  --no-typescript \
-  target/wasm32-unknown-unknown/release/gomoku.wasm
-```
-
-4) Serve `docs/`:
-```
-cd docs && python -m http.server 8000
-# open http://localhost:8000
+trunk serve --open
 ```

@@ -1,6 +1,6 @@
 // build.rs
-use std::{process::Command};
-use chrono::{ Utc};
+use chrono::Utc;
+use std::process::Command;
 
 fn main() {
     // Git commit (short)

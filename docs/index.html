@@ -1,19 +1,38 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <title>Gomoku (Rust + WebAssembly)</title>
     <style>
-      html, body { margin:0; height:100%; background:#0b0d11; }
-      canvas { display:block; width:100vw; height:100vh; touch-action:none; } /* avoid touch scroll */
+        html, body {
+            margin: 0;
+            height: 100%;
+            background: #0b0d11;
+        }
+
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            touch-action: none;
+        }
     </style>
-  </head>
-  <body>
-    <canvas id="board"></canvas>
-    <script type="module">
-      import init from './gomoku.js';
-      init().catch(console.error);
-    </script>
-  </body>
+    <!-- Trunk builds the Rust crate at this path (Cargo.toml up one level) -->
+    
+<script type="module">
+import init, * as bindings from './gomoku-31d4aab4b400f7c5.js';
+const wasm = await init({ module_or_path: './gomoku-31d4aab4b400f7c5_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+<link rel="modulepreload" href="./gomoku-31d4aab4b400f7c5.js" crossorigin="anonymous" integrity="sha384-FJUVpz2zY6kxNW5S4BBFMLexvcy9uw69ScejAr7xxpNtnXrCgEauEy/15lU7I7AD"><link rel="preload" href="./gomoku-31d4aab4b400f7c5_bg.wasm" crossorigin="anonymous" integrity="sha384-rrf9/MNtIZSF1WIyqT8ZZzJci8ZgCDNw5QsdkMOcJIpR5Y+h78gWKpeGX2mA6WAw" as="fetch" type="application/wasm"></head>
+<body>
+<canvas id="board"></canvas>
+</body>
 </html>

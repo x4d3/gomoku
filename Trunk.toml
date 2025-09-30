@@ -1,0 +1,11 @@
+# Trunk.toml
+# Where to put build artifacts:
+dist = "docs"
+
+# Faster reloads while developing:
+[watch]
+ignore = ["target", "docs"]
+
+# Release builds for Pages:
+[build]
+release = true

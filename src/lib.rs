@@ -418,12 +418,13 @@ impl App {
     async fn raf_loop(app: Rc<RefCell<App>>) {
         loop {
             app.borrow_mut().render();
-            let _ = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, _| {
-                window()
-                    .unwrap()
-                    .request_animation_frame(resolve.unchecked_ref())
-                    .unwrap();
-            }))
+            let _ =
+                wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, _| {
+                    window()
+                        .unwrap()
+                        .request_animation_frame(resolve.unchecked_ref())
+                        .unwrap();
+                }))
                 .await;
         }
     }
@@ -467,6 +468,12 @@ impl App {
 
     /// Handles pointer/tap input. Converts to board coords and plays a move.
     fn on_pointer_down(&mut self, e: PointerEvent) {
+        if self.game.winner.is_some() {
+            self.game.reset();
+            self.dirty = true;
+            return;
+        }
+
         let rect = self
             .canvas
             .unchecked_ref::<Element>()
@@ -510,7 +517,11 @@ impl App {
         // Zoom toward cursor
         let zoom_step = 1.1_f64;
         let old = self.cell_px;
-        let mut new = if dy < 0.0 { old * zoom_step } else { old / zoom_step };
+        let mut new = if dy < 0.0 {
+            old * zoom_step
+        } else {
+            old / zoom_step
+        };
         new = new.clamp(12.0, 80.0);
         if (new - old).abs() < f64::EPSILON {
             return;
@@ -621,23 +632,57 @@ impl App {
 
         // HUD
         self.ctx.set_fill_style_str("#e5e7eb");
-        self.ctx
-            .set_font("14px ui-sans-serif, system-ui, -apple-system");
-        let turn = match self.game.player {
-            Color::Black => "Your turn (X)",
-            Color::White => "AI thinking (O)",
-        };
-        let status = match self.game.winner {
-            None => turn,
-            Some(Color::Black) => "You win! Press R to restart.",
-            Some(Color::White) => "AI wins! Press R to restart.",
-        };
+        if let Some(winner) = self.game.winner {
+            let msg = match winner {
+                Color::Black => "You win!",
+                Color::White => "AI wins!",
+            };
+            let sub = "Click or Press R to play again";
 
-        let sha   = env!("BUILD_GIT_SHA");
-        let ts    = env!("BUILD_TS_UNIX");
+            let w2 = w / 2.0;
+            let h2 = h / 2.0;
 
-        let _ = self.ctx.fill_text(status, 12.0, 22.0);
+            // Measure to size a backdrop nicely
+            self.ctx.set_font("bold 36px ui-sans-serif, system-ui, -apple-system");
+            let msg_w = self.ctx.measure_text(msg).ok().map(|m| m.width()).unwrap_or(0.0);
+
+            self.ctx.set_font("16px ui-sans-serif, system-ui, -apple-system");
+            let sub_w = self.ctx.measure_text(sub).ok().map(|m| m.width()).unwrap_or(0.0);
+
+            let pad = 24.0;
+            let box_w = msg_w.max(sub_w) + pad * 2.0;
+            let box_h = 36.0 + 8.0 + 16.0 + pad * 2.0; // title + gap + subtitle + padding
+
+            // Backdrop (semi-transparent)
+            self.ctx.set_fill_style_str("rgba(0,0,0,0.55)");
+            self.ctx.fill_rect(w2 - box_w / 2.0, h2 - box_h / 2.0, box_w, box_h);
+
+            // Center baseline + alignment
+            self.ctx.set_text_align("center");
+            self.ctx.set_text_baseline("middle");
+
+            // Title
+            self.ctx.set_fill_style_str("#e6edf3");
+            self.ctx.set_font("bold 36px ui-sans-serif, system-ui, -apple-system");
+            let _ = self.ctx.fill_text(msg, w2, h2 - 10.0);
+
+            // Subtitle
+            self.ctx.set_fill_style_str("#cbd5e1");
+            self.ctx.set_font("16px ui-sans-serif, system-ui, -apple-system");
+            let _ = self.ctx.fill_text(sub, w2, h2 + 24.0);
+        } else {
+            self.ctx.set_font("14px ui-sans-serif, system-ui, -apple-system");
+            let turn = match self.game.player {
+                Color::Black => "Your turn (X)",
+                Color::White => "AI thinking (O)",
+            };
+            let _ = self.ctx.fill_text(turn, 12.0, 22.0);
+        }
+
+        let sha = env!("BUILD_GIT_SHA");
+        let ts = env!("BUILD_TS_UNIX");
         let build_info = format!("sha={sha} ts={ts}");
+        self.ctx.set_font("14px ui-sans-serif, system-ui, -apple-system");
         let _ = self.ctx.fill_text(&build_info, 12.0, h - 22.0);
     }
 }
